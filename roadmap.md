@@ -20,6 +20,46 @@ En todos los prompts:
 * Cuando una afirmación dependa de documentación o estándares actuales, utiliza fuentes oficiales.
 * No inventes APIs, capacidades cloud, resultados de benchmarks ni propiedades criptográficas.
 
+## PRODUCT NORTH STAR
+
+QuantumSafe debe evolucionar desde una herramienta de discovery hacia un sistema de control
+continuo de riesgo criptografico. El producto no debe limitarse a listar puertos, certificados o
+algoritmos: cada observacion debe poder conservar su evidencia, propietario, contexto, fecha y
+nivel de confianza.
+
+La diferenciacion empresarial se construira sobre cinco capacidades:
+
+1. Evidence-backed inventory: cada hallazgo debe poder explicar de donde procede y cuando fue
+        observado.
+2. Explainable prioritization: cada riesgo debe incluir razones, supuestos, version de politica y
+        datos faltantes.
+3. Crypto-agility measurement: medir la dificultad real de sustituir algoritmos, proveedores y
+        protocolos, no solo etiquetar algoritmos como seguros o inseguros.
+4. Migration validation: demostrar que una migracion cambio el comportamiento observado y no solo
+        que existe un plan.
+5. Controlled autonomy: permitir descubrimientos recurrentes, deteccion de drift, recomendaciones y
+        workflows aprobables, siempre con limites, auditoria y acciones reversibles cuando sea posible.
+
+Estas capacidades son objetivos de producto, no una razon para implementar ahora todos los sistemas
+necesarios. Cada etapa debe entregar una porcion util y verificable.
+
+## ENTERPRISE QUALITY GATES
+
+Antes de declarar production-grade una capacidad, el roadmap debe exigir:
+
+- threat model y limites de autorizacion documentados;
+- evidencia reproducible y trazabilidad de cambios;
+- tests unitarios y de integracion proporcionales al riesgo;
+- timeouts, cancelacion, limites de concurrencia y manejo de errores;
+- telemetria sin secretos ni material criptografico sensible;
+- configuracion segura por defecto;
+- versionado de politicas, schemas y resultados cuando aplique;
+- documentacion operativa y estrategia de recuperacion;
+- validacion con datos y entornos controlados, sin inventar benchmarks.
+
+La autonomia no significa tomar acciones destructivas sin supervision. Significa reducir trabajo
+manual mediante observacion continua, decisiones explicables y acciones gobernadas por politicas.
+
 PROMPT 00 — ARCHITECTURE & PROJECT FOUNDATION
 Quiero empezar el desarrollo de mi proyecto personal QuantumSafe.
 
