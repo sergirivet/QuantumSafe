@@ -11,26 +11,28 @@ The product is intended to help organizations answer four operational questions:
 
 ## Current status
 
-This repository is in the project foundation phase. It currently provides:
+This repository is in the initial CLI phase. It currently provides:
 
 - a Go module;
-- a minimal executable;
+- a CLI with `help`, `version` and a JSON placeholder for `scan`;
 - environment-based configuration;
 - structured logging with `log/slog`;
 - a version package;
-- unit tests for configuration and version metadata.
-
-The discovery engine and persistence layer are intentionally not implemented yet.
-
+- unit tests for configuration, version metadata and CLI behavior.
 ## Run
 
 From the repository root:
 
 ```bash
 go run ./cmd/quantumsafe
+go run ./cmd/quantumsafe help
+go run ./cmd/quantumsafe version
+go run ./cmd/quantumsafe scan example.com
 go test ./...
 go build ./...
 ```
+
+`scan` is intentionally only a command contract at this stage. It does not perform network discovery yet.
 
 The log level can be selected with `QS_LOG_LEVEL`:
 
@@ -47,6 +49,7 @@ cmd/quantumsafe/       process entry point
 internal/app/          application composition and startup
 internal/config/       process configuration
 internal/version/      build version metadata
+exercises/             small Go learning exercises
 docs/adr/              architecture decision records
 roadmap.md             staged product and engineering roadmap
 ```
