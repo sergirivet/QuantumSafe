@@ -11,14 +11,22 @@ The product is intended to help organizations answer four operational questions:
 
 ## Current status
 
-This repository is in the initial CLI phase. It currently provides:
+This repository is in the PQC readiness phase. It currently provides:
 
 - a Go module;
-- a CLI with `help`, `version` and a JSON placeholder for `scan`;
+- a CLI with `help`, `version` and JSON discovery output for `scan`;
 - environment-based configuration;
 - structured logging with `log/slog`;
 - a version package;
-- unit tests for configuration, version metadata and CLI behavior.
+- PostgreSQL-backed cryptographic inventory;
+- REST API with versioned endpoints and pagination;
+- deterministic, explainable risk assessments;
+- NIST-sourced PQC readiness classification;
+- deterministic migration plans with validation checks;
+- baseline/current migration validation;
+- certificate public-key algorithm evidence for migration analysis;
+- unit tests for configuration, version metadata, CLI behavior and discovery safety.
+
 ## Run
 
 From the repository root:
@@ -28,11 +36,18 @@ go run ./cmd/quantumsafe
 go run ./cmd/quantumsafe help
 go run ./cmd/quantumsafe version
 go run ./cmd/quantumsafe scan example.com
+go run ./cmd/quantumsafe serve
 go test ./...
 go build ./...
 ```
 
-`scan` is intentionally only a command contract at this stage. It does not perform network discovery yet.
+`scan` performs bounded discovery of public targets: DNS resolution, TCP probes on ports 80 and 443, HTTP metadata and TLS metadata. It rejects IP literals, private addresses and URL-shaped targets.
+
+Use it only against systems for which you have explicit authorization:
+
+```bash
+go run ./cmd/quantumsafe scan example.com
+```
 
 The log level can be selected with `QS_LOG_LEVEL`:
 
@@ -40,7 +55,29 @@ The log level can be selected with `QS_LOG_LEVEL`:
 QS_LOG_LEVEL=debug go run ./cmd/quantumsafe
 ```
 
-Supported values are `debug`, `info`, `warn` and `error`. Unknown values currently fall back to `info`.
+Supported values are `debug`, `info`, `warn` and `error`. Unknown values are rejected at startup.
+
+Discovery limits can be configured with bounded environment variables:
+
+```bash
+QS_SCAN_TIMEOUT=10s
+QS_SCAN_MAX_CONCURRENCY=4
+QS_SCAN_MAX_ADDRESSES=16
+```
+
+The accepted ranges are validated at startup. Invalid values stop the process instead of silently changing scan behavior.
+
+## PostgreSQL inventory
+
+Persistence is optional for local discovery. To enable it, create a PostgreSQL database, apply the schema explicitly and set `QS_DATABASE_URL`:
+
+```bash
+export QS_DATABASE_URL="postgres://user:password@localhost:5432/quantumsafe?sslmode=disable"
+psql "$QS_DATABASE_URL" -f migrations/001_initial_inventory.sql
+go run ./cmd/quantumsafe scan example.com
+```
+
+When persistence is enabled, the scan output includes `inventory_scan_id`. The repository can retrieve the complete snapshot with its asset, services, certificates and algorithms. The application does not modify the database schema automatically at startup.
 
 ## Project structure
 
@@ -49,12 +86,24 @@ cmd/quantumsafe/       process entry point
 internal/app/          application composition and startup
 internal/config/       process configuration
 internal/version/      build version metadata
+internal/discovery/    bounded DNS, TCP, HTTP and TLS discovery
+internal/inventory/    relational inventory repository and models
+internal/api/          versioned REST API and HTTP error contract
+internal/risk/         versioned deterministic risk policy
+internal/pqc/          NIST-sourced PQC readiness catalog
+internal/migration/    explainable migration planning
+migrations/            explicit PostgreSQL schema migrations
 exercises/             small Go learning exercises
 docs/adr/              architecture decision records
+docs/api.md            REST API examples and operational constraints
 roadmap.md             staged product and engineering roadmap
 ```
 
 Packages under `internal/` are private to this module. This keeps the public API surface small while the domain model is still evolving.
+
+Scan reports include a schema version, UTC timestamp, elapsed duration, resolved addresses, truncation status and observed services. Addresses and services are sorted deterministically so future inventory comparisons do not depend on goroutine completion order.
+
+The REST API is intentionally bound to `127.0.0.1:8080` by default and requires PostgreSQL. Authentication and authorization are not implemented yet, so the server must remain behind a trusted boundary. See [docs/api.md](docs/api.md) for the endpoint contract.
 
 ## Product direction
 
