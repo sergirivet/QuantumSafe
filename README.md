@@ -23,7 +23,11 @@ This repository is in the PQC readiness phase. It currently provides:
 - deterministic, explainable risk assessments;
 - NIST-sourced PQC readiness classification;
 - deterministic migration plans with validation checks;
+- RBAC, Bearer authentication and PostgreSQL audit events;
 - baseline/current migration validation;
+- on-demand service, algorithm and certificate drift detection;
+- bounded in-process scheduler foundation;
+- PostgreSQL schedule leases for duplicate-run protection;
 - certificate public-key algorithm evidence for migration analysis;
 - unit tests for configuration, version metadata, CLI behavior and discovery safety.
 
@@ -92,6 +96,8 @@ internal/api/          versioned REST API and HTTP error contract
 internal/risk/         versioned deterministic risk policy
 internal/pqc/          NIST-sourced PQC readiness catalog
 internal/migration/    explainable migration planning
+internal/drift/        deterministic snapshot drift detection
+internal/automation/   bounded scheduler and worker execution contract
 migrations/            explicit PostgreSQL schema migrations
 exercises/             small Go learning exercises
 docs/adr/              architecture decision records
@@ -103,7 +109,9 @@ Packages under `internal/` are private to this module. This keeps the public API
 
 Scan reports include a schema version, UTC timestamp, elapsed duration, resolved addresses, truncation status and observed services. Addresses and services are sorted deterministically so future inventory comparisons do not depend on goroutine completion order.
 
-The REST API is intentionally bound to `127.0.0.1:8080` by default and requires PostgreSQL. Authentication and authorization are not implemented yet, so the server must remain behind a trusted boundary. See [docs/api.md](docs/api.md) for the endpoint contract.
+The REST API is intentionally bound to `127.0.0.1:8080` by default and requires PostgreSQL. It now enforces a controlled Bearer token and RBAC boundary. See [docs/api.md](docs/api.md) for the endpoint contract.
+
+The operational `serve` command requires `QS_API_TOKEN`, `QS_API_TENANT_ID`, `QS_API_SUBJECT` and `QS_API_ROLE`. The current token adapter is intended for controlled deployments while an OIDC/SAML provider is designed and integrated; it is not a complete enterprise identity platform.
 
 ## Product direction
 

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/sergirivet/QuantumSafe/internal/discovery"
+	"github.com/sergirivet/QuantumSafe/internal/drift"
+	"github.com/sergirivet/QuantumSafe/internal/governance"
 	"github.com/sergirivet/QuantumSafe/internal/inventory"
 	"github.com/sergirivet/QuantumSafe/internal/migration"
 	"github.com/sergirivet/QuantumSafe/internal/pqc"
@@ -42,6 +44,8 @@ type Server struct {
 	logger         *slog.Logger
 	maxBodyBytes   int64
 	requestTimeout time.Duration
+	authenticator  governance.Authenticator
+	audit          governance.AuditSink
 }
 
 type createScanRequest struct {
@@ -76,12 +80,22 @@ type apiError struct {
 }
 
 func NewServer(scanner discovery.Scanner, store Store) *Server {
+	return newServer(scanner, store, nil, nil)
+}
+
+func NewSecureServer(scanner discovery.Scanner, store Store, authenticator governance.Authenticator, audit governance.AuditSink) *Server {
+	return newServer(scanner, store, authenticator, audit)
+}
+
+func newServer(scanner discovery.Scanner, store Store, authenticator governance.Authenticator, audit governance.AuditSink) *Server {
 	return &Server{
 		scanner:        scanner,
 		store:          store,
 		logger:         slog.Default(),
 		maxBodyBytes:   defaultMaxBodyBytes,
 		requestTimeout: defaultRequestTimeout,
+		authenticator:  authenticator,
+		audit:          audit,
 	}
 }
 
@@ -97,7 +111,79 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/pqc/readiness", server.handlePQCReadiness)
 	mux.HandleFunc("/api/v1/migration/plans", server.handleMigrationPlans)
 	mux.HandleFunc("/api/v1/migration/validation", server.handleMigrationValidation)
-	return server.withRequestContext(mux)
+	mux.HandleFunc("/api/v1/drift", server.handleDrift)
+	return server.withSecurity(server.withRequestContext(mux))
+}
+
+func (server *Server) withSecurity(next http.Handler) http.Handler {
+	if server.authenticator == nil {
+		return next
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		permission := permissionForRequest(request)
+		principal, err := server.authenticator.Authenticate(request)
+		if err != nil {
+			server.recordAudit(request.Context(), governance.AuditEvent{Action: string(permission), ResourceType: "http_request", Outcome: "unauthenticated"})
+			writer.Header().Set("WWW-Authenticate", "Bearer")
+			server.writeError(writer, http.StatusUnauthorized, "unauthenticated", "authentication required")
+			return
+		}
+		if err := governance.Authorize(principal, permission); err != nil {
+			server.recordAudit(request.Context(), governance.AuditEvent{TenantID: principal.TenantID, Subject: principal.Subject, Action: string(permission), ResourceType: "http_request", Outcome: "forbidden"})
+			server.writeError(writer, http.StatusForbidden, "forbidden", "permission denied")
+			return
+		}
+
+		request = request.WithContext(governance.WithPrincipal(request.Context(), principal))
+		statusWriter := &responseStatusWriter{ResponseWriter: writer, status: http.StatusOK}
+		next.ServeHTTP(statusWriter, request)
+		outcome := "success"
+		if statusWriter.status >= http.StatusInternalServerError {
+			outcome = "error"
+		}
+		server.recordAudit(request.Context(), governance.AuditEvent{TenantID: principal.TenantID, Subject: principal.Subject, Action: string(permission), ResourceType: "http_request", Outcome: outcome, Metadata: map[string]any{"status": statusWriter.status, "path": request.URL.Path}})
+	})
+}
+
+type responseStatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *responseStatusWriter) WriteHeader(status int) {
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *responseStatusWriter) Write(body []byte) (int, error) {
+	if writer.status == http.StatusOK {
+		writer.status = http.StatusOK
+	}
+	return writer.ResponseWriter.Write(body)
+}
+
+func (server *Server) recordAudit(ctx context.Context, event governance.AuditEvent) {
+	if server.audit == nil {
+		return
+	}
+	event.OccurredAt = time.Now().UTC()
+	if err := server.audit.Append(ctx, event); err != nil {
+		server.logger.ErrorContext(ctx, "audit append failed", "error", err, "action", event.Action)
+	}
+}
+
+func permissionForRequest(request *http.Request) governance.Permission {
+	path := request.URL.Path
+	if path == "/api/v1/scans" && request.Method == http.MethodPost {
+		return governance.PermissionScanCreate
+	}
+	if strings.HasPrefix(path, "/api/v1/scans/") && strings.HasSuffix(path, "/risk") || strings.HasPrefix(path, "/api/v1/pqc/") {
+		return governance.PermissionRiskRead
+	}
+	if strings.HasPrefix(path, "/api/v1/migration/") || path == "/api/v1/drift" {
+		return governance.PermissionMigrationRead
+	}
+	return governance.PermissionInventoryRead
 }
 
 func (server *Server) withRequestContext(next http.Handler) http.Handler {
@@ -369,6 +455,33 @@ func (server *Server) handleMigrationValidation(writer http.ResponseWriter, requ
 		return
 	}
 	server.writeJSON(writer, http.StatusOK, migration.Validate(baseline, current))
+}
+
+func (server *Server) handleDrift(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		server.writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if server.store == nil {
+		server.writeError(writer, http.StatusServiceUnavailable, "inventory_unavailable", "inventory service is unavailable")
+		return
+	}
+	baselineID, currentID, ok := parseValidationIDs(request)
+	if !ok {
+		server.writeError(writer, http.StatusBadRequest, "invalid_id", "baseline_scan_id and current_scan_id must be positive integers")
+		return
+	}
+	baseline, err := server.store.GetScan(request.Context(), baselineID)
+	if err != nil {
+		server.handleStoreError(writer, err)
+		return
+	}
+	current, err := server.store.GetScan(request.Context(), currentID)
+	if err != nil {
+		server.handleStoreError(writer, err)
+		return
+	}
+	server.writeJSON(writer, http.StatusOK, drift.Compare(baseline, current))
 }
 
 func (server *Server) writeServicesPage(writer http.ResponseWriter, request *http.Request) {

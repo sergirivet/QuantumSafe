@@ -13,6 +13,7 @@ import (
 	"github.com/sergirivet/QuantumSafe/internal/api"
 	"github.com/sergirivet/QuantumSafe/internal/config"
 	"github.com/sergirivet/QuantumSafe/internal/discovery"
+	"github.com/sergirivet/QuantumSafe/internal/governance"
 	"github.com/sergirivet/QuantumSafe/internal/inventory"
 	"github.com/sergirivet/QuantumSafe/internal/version"
 )
@@ -27,6 +28,7 @@ type scanStore interface {
 	ListServices(context.Context, int, int) ([]inventory.Service, int, error)
 	ListCertificates(context.Context, int, int) ([]inventory.Certificate, int, error)
 	ListAlgorithms(context.Context, int, int) ([]inventory.Algorithm, int, error)
+	Append(context.Context, governance.AuditEvent) error
 }
 
 type scanOutput struct {
@@ -112,13 +114,18 @@ func runWithConfig(ctx context.Context, args []string, output io.Writer, errorOu
 }
 
 func runServer(ctx context.Context, cfg config.Config, scanner discovery.Scanner, store scanStore) error {
-	if store == nil {
-		return fmt.Errorf("serve requires QS_DATABASE_URL")
+	if store == nil || cfg.APIToken == "" {
+		return fmt.Errorf("serve requires QS_DATABASE_URL and QS_API_TOKEN")
+	}
+	principal := governance.Principal{Subject: cfg.APISubject, TenantID: cfg.APITenantID, Role: governance.Role(cfg.APIRole)}
+	authenticator, err := governance.NewStaticTokenAuthenticator(cfg.APIToken, principal)
+	if err != nil {
+		return fmt.Errorf("configure API authentication: %w", err)
 	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewServer(scanner, store).Handler(),
+		Handler:           api.NewSecureServer(scanner, store, authenticator, store).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

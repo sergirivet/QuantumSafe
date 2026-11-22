@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/sergirivet/QuantumSafe/internal/discovery"
+	"github.com/sergirivet/QuantumSafe/internal/governance"
 	"github.com/sergirivet/QuantumSafe/internal/inventory"
 )
 
@@ -206,6 +207,27 @@ func TestGetMigrationValidationComparesTwoScans(t *testing.T) {
 	}
 }
 
+func TestGetDriftComparesTwoScans(t *testing.T) {
+	server := NewServer(fakeScanner{}, &fakeStore{snapshot: inventory.Snapshot{ID: 1, Target: "example.com", Asset: inventory.Asset{Name: "example.com"}}})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/drift?baseline_scan_id=1&current_scan_id=2", nil)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode drift response: %v", err)
+	}
+	if response.Status != "inconclusive" {
+		t.Fatalf("expected inconclusive empty drift comparison, got %q", response.Status)
+	}
+}
+
 func TestCreateScanEnforcesBodyLimit(t *testing.T) {
 	server := NewServer(fakeScanner{}, &fakeStore{})
 	server.maxBodyBytes = 8
@@ -216,6 +238,34 @@ func TestCreateScanEnforcesBodyLimit(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", recorder.Code)
+	}
+}
+
+func TestSecureServerEnforcesAuthenticationAndAuditing(t *testing.T) {
+	principal := governance.Principal{Subject: "analyst-1", TenantID: "tenant-1", Role: governance.RoleAnalyst}
+	authenticator, err := governance.NewStaticTokenAuthenticator("test-token", principal)
+	if err != nil {
+		t.Fatalf("create authenticator: %v", err)
+	}
+	audit := &fakeAudit{}
+	server := NewSecureServer(fakeScanner{}, &fakeStore{}, authenticator, audit).Handler()
+
+	unauthenticated := httptest.NewRequest(http.MethodGet, "/api/v1/assets", nil)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, unauthenticated)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", recorder.Code)
+	}
+
+	forbidden := httptest.NewRequest(http.MethodPost, "/api/v1/scans", strings.NewReader(`{"target":"example.com"}`))
+	forbidden.Header.Set("Authorization", "Bearer test-token")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, forbidden)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("analyst should create scans, got %d", recorder.Code)
+	}
+	if audit.events == 0 {
+		t.Fatal("expected audit event")
 	}
 }
 
@@ -250,6 +300,15 @@ type fakeStore struct {
 	total      int
 	limit      int
 	offset     int
+}
+
+type fakeAudit struct {
+	events int
+}
+
+func (audit *fakeAudit) Append(context.Context, governance.AuditEvent) error {
+	audit.events++
+	return nil
 }
 
 func (store *fakeStore) SaveReport(context.Context, discovery.Report) (inventory.ScanRecord, error) {

@@ -9,7 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sergirivet/QuantumSafe/internal/automation"
 	"github.com/sergirivet/QuantumSafe/internal/discovery"
+	"github.com/sergirivet/QuantumSafe/internal/governance"
 )
 
 type Repository struct {
@@ -36,6 +38,78 @@ func (repository *Repository) Close() {
 	if repository != nil && repository.pool != nil {
 		repository.pool.Close()
 	}
+}
+
+func (repository *Repository) Append(ctx context.Context, event governance.AuditEvent) error {
+	if repository == nil || repository.pool == nil {
+		return fmt.Errorf("inventory repository is not configured")
+	}
+	metadata, err := json.Marshal(event.Metadata)
+	if err != nil {
+		return fmt.Errorf("marshal audit metadata: %w", err)
+	}
+	_, err = repository.pool.Exec(ctx, `
+		INSERT INTO audit_events (tenant_id, subject, action, resource_type, resource_id, outcome, occurred_at, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+		event.TenantID, event.Subject, event.Action, event.ResourceType, event.ResourceID, event.Outcome, event.OccurredAt, metadata)
+	if err != nil {
+		return fmt.Errorf("insert audit event: %w", err)
+	}
+	return nil
+}
+
+func (repository *Repository) Due(ctx context.Context, now time.Time, limit int) ([]automation.Schedule, error) {
+	rows, err := repository.pool.Query(ctx, `
+		SELECT id, tenant_id, target, interval_seconds, next_run, enabled, lease_owner, COALESCE(lease_until, 'epoch'::timestamptz)
+		FROM schedules
+		WHERE enabled = TRUE AND next_run <= $1 AND (lease_until IS NULL OR lease_until < $1)
+		ORDER BY next_run, id
+		LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("load due schedules: %w", err)
+	}
+	defer rows.Close()
+
+	schedules := make([]automation.Schedule, 0)
+	for rows.Next() {
+		var schedule automation.Schedule
+		var intervalSeconds int64
+		if err := rows.Scan(&schedule.ID, &schedule.TenantID, &schedule.Target, &intervalSeconds, &schedule.NextRun, &schedule.Enabled, &schedule.LeaseOwner, &schedule.LeaseUntil); err != nil {
+			return nil, fmt.Errorf("schedule row: %w", err)
+		}
+		schedule.Interval = time.Duration(intervalSeconds) * time.Second
+		schedules = append(schedules, schedule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("schedule rows: %w", err)
+	}
+	return schedules, nil
+}
+
+func (repository *Repository) Claim(ctx context.Context, scheduleID, workerID string, now time.Time, lease time.Duration) (bool, error) {
+	result, err := repository.pool.Exec(ctx, `
+		UPDATE schedules
+		SET lease_owner = $2, lease_until = $3, updated_at = now()
+		WHERE id = $1 AND enabled = TRUE AND (lease_until IS NULL OR lease_until < $4)`, scheduleID, workerID, now.Add(lease), now)
+	if err != nil {
+		return false, fmt.Errorf("claim schedule %q: %w", scheduleID, err)
+	}
+	return result.RowsAffected() == 1, nil
+}
+
+func (repository *Repository) Complete(ctx context.Context, scheduleID, workerID string, nextRun time.Time, runErr error) error {
+	lastError := ""
+	if runErr != nil {
+		lastError = runErr.Error()
+	}
+	_, err := repository.pool.Exec(ctx, `
+		UPDATE schedules
+		SET lease_owner = '', lease_until = NULL, last_run = now(), next_run = $3, last_error = $4, updated_at = now()
+		WHERE id = $1 AND lease_owner = $2`, scheduleID, workerID, nextRun, lastError)
+	if err != nil {
+		return fmt.Errorf("complete schedule %q: %w", scheduleID, err)
+	}
+	return nil
 }
 
 func (repository *Repository) SaveReport(ctx context.Context, report discovery.Report) (ScanRecord, error) {

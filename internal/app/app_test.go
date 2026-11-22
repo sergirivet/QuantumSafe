@@ -10,6 +10,7 @@ import (
 
 	"github.com/sergirivet/QuantumSafe/internal/config"
 	"github.com/sergirivet/QuantumSafe/internal/discovery"
+	"github.com/sergirivet/QuantumSafe/internal/governance"
 	"github.com/sergirivet/QuantumSafe/internal/inventory"
 )
 
@@ -106,6 +107,10 @@ func (store *fakeStore) ListCertificates(context.Context, int, int) ([]inventory
 
 func (store *fakeStore) ListAlgorithms(context.Context, int, int) ([]inventory.Algorithm, int, error) {
 	return nil, 0, nil
+}
+
+func (store *fakeStore) Append(context.Context, governance.AuditEvent) error {
+	return nil
 }
 
 func (scanner fakeScanner) Scan(context.Context, string) (discovery.Report, error) {

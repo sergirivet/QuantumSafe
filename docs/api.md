@@ -9,6 +9,17 @@ QS_DATABASE_URL="postgres://user:password@localhost:5432/quantumsafe?sslmode=dis
 
 The default bind address is `127.0.0.1:8080`. Change it with `QS_HTTP_ADDR` only when the deployment boundary and authentication model are ready for a wider bind.
 
+The server requires an authenticated principal:
+
+```bash
+export QS_API_TOKEN="replace-with-a-secret"
+export QS_API_TENANT_ID="tenant-local"
+export QS_API_SUBJECT="operator-1"
+export QS_API_ROLE="admin"
+```
+
+Requests use `Authorization: Bearer ...`. Roles are `viewer`, `analyst` and `admin`.
+
 ## Create a scan
 
 ```http
@@ -55,6 +66,7 @@ curl 'http://127.0.0.1:8080/api/v1/algorithms?page=1&page_size=50'
 curl 'http://127.0.0.1:8080/api/v1/pqc/readiness?scan_id=42'
 curl 'http://127.0.0.1:8080/api/v1/migration/plans?scan_id=42'
 curl 'http://127.0.0.1:8080/api/v1/migration/validation?baseline_scan_id=42&current_scan_id=57'
+curl 'http://127.0.0.1:8080/api/v1/drift?baseline_scan_id=42&current_scan_id=57'
 ```
 
 Get one asset:
@@ -87,7 +99,7 @@ Errors have a stable public shape and do not expose SQL, network or stack-trace 
 }
 ```
 
-Authentication and authorization are intentionally not implemented yet. Do not expose this server beyond a trusted local boundary until that layer exists.
+The current Bearer token adapter is a controlled transitional mechanism. Do not treat it as a replacement for an enterprise identity provider or expose it broadly until token rotation, OIDC/SAML integration and tenant lifecycle management exist.
 
 ## PQC readiness
 
@@ -116,3 +128,9 @@ The result is one of:
 - `passed`: all applicable checks passed;
 - `failed`: a target mismatch or vulnerable algorithm remains;
 - `inconclusive`: required evidence is missing, for example when a service disappeared from the current scan.
+
+## Drift detection
+
+`GET /api/v1/drift?baseline_scan_id=42&current_scan_id=57` reports added or removed services, algorithm changes and certificate fingerprint changes. It is an on-demand comparison; recurring scheduling and distributed workers are not enabled yet.
+
+The scheduler foundation validates and executes due work in-process and defines PostgreSQL persistence with leases. Schedule CRUD, a permanent worker process, retries and tenant quotas are intentionally deferred until the operational model is defined.

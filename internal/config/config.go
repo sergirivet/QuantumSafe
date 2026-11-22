@@ -27,6 +27,10 @@ type Config struct {
 	MaxAddresses   int
 	DatabaseURL    string
 	HTTPAddr       string
+	APIToken       string
+	APITenantID    string
+	APISubject     string
+	APIRole        string
 }
 
 func Load() (Config, error) {
@@ -37,12 +41,21 @@ func Load() (Config, error) {
 		MaxAddresses:   defaultMaxAddresses,
 		DatabaseURL:    os.Getenv("QS_DATABASE_URL"),
 		HTTPAddr:       valueOrDefault("QS_HTTP_ADDR", "127.0.0.1:8080"),
+		APIToken:       os.Getenv("QS_API_TOKEN"),
+		APITenantID:    valueOrDefault("QS_API_TENANT_ID", "local"),
+		APISubject:     valueOrDefault("QS_API_SUBJECT", "local-admin"),
+		APIRole:        os.Getenv("QS_API_ROLE"),
 	}
 	if config.LogLevel != "debug" && config.LogLevel != "info" && config.LogLevel != "warn" && config.LogLevel != "error" {
 		return Config{}, fmt.Errorf("%w: QS_LOG_LEVEL must be debug, info, warn or error", ErrInvalidConfiguration)
 	}
 	if _, _, err := net.SplitHostPort(config.HTTPAddr); err != nil {
 		return Config{}, fmt.Errorf("%w: QS_HTTP_ADDR must be host:port", ErrInvalidConfiguration)
+	}
+	if config.APIToken != "" {
+		if config.APIRole != "viewer" && config.APIRole != "analyst" && config.APIRole != "admin" {
+			return Config{}, fmt.Errorf("%w: QS_API_ROLE must be viewer, analyst or admin when QS_API_TOKEN is set", ErrInvalidConfiguration)
+		}
 	}
 
 	if value := os.Getenv("QS_SCAN_TIMEOUT"); value != "" {
